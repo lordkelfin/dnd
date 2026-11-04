@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loading…</title>
+<style>
+:root{--bg:#f6f1e7;--ink:#2b2118;--mute:#7a6a58;--line:#d9ccb4;--gold:#b8860b;--accent:#8b2e2e}
+@media (prefers-color-scheme:dark){:root{--bg:#1c1712;--ink:#f0e6d2;--mute:#a89880;--line:#4a3d2f;--gold:#e3b341;--accent:#e0705f}}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--ink);font-family:Georgia,'Times New Roman',serif;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;box-sizing:border-box}
+main{max-width:460px}
+.spin{width:30px;height:30px;margin:0 auto 16px;border:3px solid var(--line);border-top-color:var(--gold);border-radius:50%;animation:s .9s linear infinite}
+@keyframes s{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.spin{animation-duration:4s}}
+h1{font-size:1.15rem;margin:0 0 6px}
+p{margin:6px 0;color:var(--mute);font-size:.92rem;line-height:1.45}
+a{color:var(--accent)}
+.err .spin{display:none}.err h1{color:var(--accent)}
+</style>
+</head>
+<body>
+<main id="box">
+  <div class="spin"></div>
+  <h1 id="msg">Looking for the latest version…</h1>
+  <p id="sub"></p>
+  <noscript><p>This page needs JavaScript to find the newest version.</p></noscript>
+</main>
+<script>
+/*  Drop this file next to your app's .html file (any name). It asks GitHub which other .html files are in the same
+    folder and opens the newest one — so a new version is just: upload it, delete the old one. Nothing to rename.
+
+    "Newest" = the last name in natural order, so  app_V24.html  beats  app_V23.html  and  app_V9.html  (V10 > V9).
+    Keep a version number in the file names if you ever have more than one .html file here at the same time. */
+const CONFIG={
+  owner:'',     // only if your site is on a custom domain instead of  name.github.io  — your GitHub user name
+  repo:'',      //                                                                        — the repository name
+  path:'',      //                                                                        — folder inside the repo ('' = top level)
+  branch:''     // only if the site isn't published from the default branch
+};
+
+const $=id=>document.getElementById(id);
+const IGNORE=/^(index|404)\.html?$/i;
+
+function fail(title,detail){
+  $('box').className='err';$('msg').textContent=title;
+  $('sub').innerHTML=detail;
+  document.title='Couldn’t open';
+}
+async function getJSON(url,ms){
+  const c=new AbortController(),t=setTimeout(()=>c.abort(),ms||8000);
+  try{const r=await fetch(url,{signal:c.signal});if(!r.ok)throw new Error('HTTP '+r.status);return await r.json()}
+  finally{clearTimeout(t)}
+}
+// where could this page live in GitHub?  project site  name.github.io/REPO/…   or the user site  name.github.io/…
+function guessLocations(){
+  if(CONFIG.owner&&CONFIG.repo)return[{owner:CONFIG.owner,repo:CONFIG.repo,path:CONFIG.path.replace(/^\/|\/$/g,'')}];
+  const h=location.hostname;if(!/\.github\.io$/i.test(h))return[];
+  const owner=h.split('.')[0],segs=location.pathname.split('/').filter(Boolean);
+  if(segs.length&&/\.[a-z0-9]+$/i.test(segs[segs.length-1]))segs.pop();          // drop a trailing  index.html
+  const out=[];
+  if(segs.length)out.push({owner,repo:segs[0],path:segs.slice(1).join('/')});    // project site
+  out.push({owner,repo:owner+'.github.io',path:segs.join('/')});                  // user site
+  return out;
+}
+async function candidatesIn(loc){
+  // a site published from a /docs folder keeps its pages there, so try that too
+  for(const dir of [loc.path,('docs/'+loc.path).replace(/\/$/,'')]){
+    try{
+      const q=CONFIG.branch?`?ref=${encodeURIComponent(CONFIG.branch)}`:'';
+      const list=await getJSON(`https://api.github.com/repos/${loc.owner}/${loc.repo}/contents/${dir.split('/').filter(Boolean).map(encodeURIComponent).join('/')}${q}`);
+      if(!Array.isArray(list))continue;
+      const names=list.filter(x=>x.type==='file'&&/\.html?$/i.test(x.name)&&!IGNORE.test(x.name)).map(x=>x.name);
+      if(names.length)return names.sort((a,b)=>b.localeCompare(a,undefined,{numeric:true,sensitivity:'base'}));   // newest first
+    }catch(e){if(/HTTP 403|HTTP 429/.test(String(e.message)))throw e}            // rate-limited: stop and use the remembered one
+  }
+  return null;
+}
+// GitHub lists a freshly uploaded file a minute or two before the site has actually published it, so check it's really there
+async function reachable(name){
+  try{const r=await fetch(new URL(encodeURIComponent(name),location.href).href,{method:'HEAD',cache:'no-store'});return r.ok}catch(e){return false}
+}
+function go(name){
+  $('msg').textContent='Opening '+name+'…';document.title='Opening…';
+  location.replace(new URL(encodeURIComponent(name),location.href).href+location.search+location.hash);   // replace: the Back button won't bounce you here again
+}
+(async function(){
+  const memKey='latest-html:'+location.origin+location.pathname.replace(/[^/]*$/,'');
+  if(location.protocol==='file:'){
+    fail('Open the app file directly','A browser can’t look inside a folder when a page is opened from your computer. On your GitHub site this page finds the newest version by itself; here, just open the app’s own .html file.');
+    return;
+  }
+  let found=[],limited=false;
+  for(const loc of guessLocations()){
+    try{found=await candidatesIn(loc)||[]}catch(e){limited=true;break}
+    if(found.length)break;
+  }
+  let last=null;try{last=localStorage.getItem(memKey)}catch(e){}
+  const tryList=[...found];if(last&&!tryList.includes(last))tryList.push(last);      // the version this browser opened last time is the safety net
+  for(const name of tryList){
+    if(await reachable(name)){try{localStorage.setItem(memKey,name)}catch(e){}go(name);return}
+  }
+  if(found.length)fail('The new version is still being published','GitHub Pages usually needs a minute or two after an upload. Reload in a moment.');
+  else if(limited)fail('GitHub is busy right now','GitHub limits how often its file list can be asked for. Please try again in a few minutes.');
+  else fail('No app file found next to this page','Upload your app’s .html file into the same folder as <b>index.html</b> (any name works), then reload.');
+})();
+</script>
+</body>
+</html>
